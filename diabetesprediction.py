@@ -92,4 +92,3 @@ with col2:
 
 st.subheader("Data Table")
 st.dataframe(t_df)
-
