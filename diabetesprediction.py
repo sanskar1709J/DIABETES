@@ -1,322 +1,3 @@
-
-# Import necessary libraries
-import pandas as pd
-import numpy as np
-
-# Load the PIMA Indians Diabetes Dataset directly from a public URL
-url = "https://raw.githubusercontent.com/jbrownlee/Datasets/master/pima-indians-diabetes.data.csv"
-
-# Name the columns based on standard PIMA dataset features
-column_names = [
-    'Pregnancies', 'Glucose', 'BloodPressure', 'SkinThickness',
-    'Insulin', 'BMI', 'DiabetesPedigreeFunction', 'Age', 'Outcome'
-]
-
-df = pd.read_csv(url, names=column_names)
-
-# View the first 5 rows of the dataset
-print("Dataset shape:", df.shape)
-df.head()
-
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-
-# 1. Replace invalid 0 values with NaN in clinical measurement columns
-cols_with_invalid_zeros = ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI']
-
-for col in cols_with_invalid_zeros:
-    df[col] = df[col].replace(0, np.nan)
-    # Fill missing values with the column median
-    df[col] = df[col].fillna(df[col].median())
-
-# 2. Separate Features (X) from the Target label (y)
-X = df.drop(columns=['Outcome'])
-y = df['Outcome']
-
-# 3. Split into Training (80%) and Testing (20%) sets
-# stratify=y ensures both sets have the same proportion of diabetic/non-diabetic cases
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
-
-# 4. Scale features so they all have a mean of 0 and variance of 1
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
-
-print("Data cleaning complete!")
-print("Training samples:", X_train_scaled.shape[0])
-print("Testing samples:", X_test_scaled.shape[0])
-
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, classification_report, roc_auc_score
-
-# 1. Train a Logistic Regression model (Baseline)
-lr_model = LogisticRegression(random_state=42)
-lr_model.fit(X_train_scaled, y_train)
-y_pred_lr = lr_model.predict(X_test_scaled)
-
-print("--- Logistic Regression Performance ---")
-print(f"Accuracy: {accuracy_score(y_test, y_pred_lr):.2f}")
-print(f"ROC-AUC: {roc_auc_score(y_test, lr_model.predict_proba(X_test_scaled)[:, 1]):.2f}")
-print("\nClassification Report:\n", classification_report(y_test, y_pred_lr))
-
-# 2. Train a Random Forest model
-rf_model = RandomForestClassifier(random_state=42, n_estimators=100)
-rf_model.fit(X_train_scaled, y_train)
-y_pred_rf = rf_model.predict(X_test_scaled)
-
-print("\n--- Random Forest Performance ---")
-print(f"Accuracy: {accuracy_score(y_test, y_pred_rf):.2f}")
-print(f"ROC-AUC: {roc_auc_score(y_test, rf_model.predict_proba(X_test_scaled)[:, 1]):.2f}")
-print("\nClassification Report:\n", classification_report(y_test, y_pred_rf))
-
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-# 1. Extract feature importances from the Random Forest model
-importances = rf_model.feature_importances_
-features = X.columns
-
-# 2. Sort them for clean visualization
-feature_df = pd.DataFrame({'Feature': features, 'Importance': importances})
-feature_df = feature_df.sort_values(by='Importance', ascending=False)
-
-# 3. Plot the results
-plt.figure(figsize=(10, 5))
-sns.barplot(x='Importance', y='Feature', hue='Feature', data=feature_df, palette='Blues_r', legend=False)
-plt.title('Clinical Feature Importance (What drives diabetes risk?)')
-plt.xlabel('Importance Score')
-plt.ylabel('Feature')
-plt.show()
-
-print(feature_df)
-
-# Define a test patient profile:
-# [Pregnancies, Glucose, BloodPressure, SkinThickness, Insulin, BMI, DiabetesPedigreeFunction, Age]
-new_patient = [[2, 148, 72, 35, 125, 33.6, 0.627, 50]]
-
-# Scale the input using the exact same scaler from Step 2
-patient_scaled = scaler.transform(new_patient)
-
-# Predict outcome
-prediction = rf_model.predict(patient_scaled)
-probability = rf_model.predict_proba(patient_scaled)
-
-print("--- Patient Risk Assessment ---")
-if prediction[0] == 1:
-    print(f"⚠️ HIGH RISK: The model predicts Diabetes (Confidence: {probability[0][1]*100:.1f}%)")
-else:
-    print(f"✅ LOW RISK: The model predicts Non-Diabetic (Confidence: {probability[0][0]*100:.1f}%)")
-
-from sklearn.model_selection import StratifiedKFold, RandomizedSearchCV
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import roc_auc_score
-import numpy as np
-
-# 1. Define the parameter grid for Random Forest to explore
-param_grid = {
-    'n_estimators': [50, 100, 200, 300],
-    'max_depth': [None, 5, 10, 20],
-    'min_samples_split': [2, 5, 10],
-    'min_samples_leaf': [1, 2, 4],
-    'max_features': ['sqrt', 'log2']
-}
-
-# 2. Set up Stratified K-Fold (ensures balanced classes in every fold)
-cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-
-# 3. Initialize Randomized Search
-rf_base = RandomForestClassifier(random_state=42)
-random_search = RandomizedSearchCV(
-    estimator=rf_base,
-    param_distributions=param_grid,
-    n_iter=15,          # Try 15 different random combinations
-    cv=cv,              # Use 5-fold cross-validation
-    scoring='roc_auc',  # Optimize for ROC-AUC score
-    random_state=42,
-    n_jobs=-1           # Use all CPU cores for speed
-)
-
-# 4. Fit the search on your training data
-random_search.fit(X_train_scaled, y_train)
-
-# 5. Print best parameters and score
-print("--- Hyperparameter Tuning Results ---")
-print("Best Parameters Found:")
-print(random_search.best_params_)
-print(f"Best Cross-Validation ROC-AUC: {random_search.best_score_:.4f}")
-
-# Save your best tuned model to use moving forward
-best_rf_model = random_search.best_estimator_
-
-# 1. Install SHAP if not already present
-!pip install shap -q
-
-import shap
-
-# 2. Initialize the SHAP Tree Explainer using your best tuned model
-explainer = shap.TreeExplainer(best_rf_model)
-
-# Calculate SHAP values for your test data
-shap_values = explainer(X_test_scaled)
-
-# 3. Plot a Summary Plot (Shows overall impact of each feature)
-print("Generating SHAP Summary Plot...")
-shap.summary_plot(shap_values, X_test, feature_names=X.columns)
-
-# Create a fresh copy of your dataset for feature engineering
-df_fe = df.copy()
-
-# 1. Glucose-to-Insulin ratio (key metabolic indicator)
-df_fe['Glucose_Insulin_Ratio'] = df_fe['Glucose'] / (df_fe['Insulin'] + 1e-5)
-
-# 2. BMI-to-Age interaction (metabolic risk grows with age and weight)
-df_fe['BMI_Age_Interaction'] = df_fe['BMI'] * df_fe['Age']
-
-# 3. Blood Pressure severity index
-df_fe['BP_Risk'] = df_fe['BloodPressure'] * df_fe['Age']
-
-# Separate features and target again
-X_fe = df_fe.drop(columns=['Outcome'])
-y_fe = df_fe['Outcome']
-
-# Re-split and scale
-X_train_fe, X_test_fe, y_train_fe, y_test_fe = train_test_split(
-    X_fe, y_fe, test_size=0.2, random_state=42, stratify=y_fe
-)
-
-scaler_fe = StandardScaler()
-X_train_fe_scaled = scaler_fe.fit_transform(X_train_fe)
-X_test_fe_scaled = scaler_fe.transform(X_test_fe)
-
-# Quick test with Random Forest
-from sklearn.metrics import roc_auc_score
-test_rf = RandomForestClassifier(random_state=42)
-test_rf.fit(X_train_fe_scaled, y_train_fe)
-preds = test_rf.predict_proba(X_test_fe_scaled)[:, 1]
-
-print(f"New ROC-AUC Score with Engineered Features: {roc_auc_score(y_test_fe, preds):.4f}")
-
-# Create a fresh copy of your dataset for feature engineering
-df_fe = df.copy()
-
-# 1. Glucose-to-Insulin ratio (key metabolic indicator)
-df_fe['Glucose_Insulin_Ratio'] = df_fe['Glucose'] / (df_fe['Insulin'] + 1e-5)
-
-# 2. BMI-to-Age interaction (metabolic risk grows with age and weight)
-df_fe['BMI_Age_Interaction'] = df_fe['BMI'] * df_fe['Age']
-
-# 3. Blood Pressure severity index
-df_fe['BP_Risk'] = df_fe['BloodPressure'] * df_fe['Age']
-
-# Separate features and target again
-X_fe = df_fe.drop(columns=['Outcome'])
-y_fe = df_fe['Outcome']
-
-# Re-split and scale
-X_train_fe, X_test_fe, y_train_fe, y_test_fe = train_test_split(
-    X_fe, y_fe, test_size=0.2, random_state=42, stratify=y_fe
-)
-
-scaler_fe = StandardScaler()
-X_train_fe_scaled = scaler_fe.fit_transform(X_train_fe)
-X_test_fe_scaled = scaler_fe.transform(X_test_fe)
-
-# Quick test with Random Forest
-from sklearn.metrics import roc_auc_score
-test_rf = RandomForestClassifier(random_state=42)
-test_rf.fit(X_train_fe_scaled, y_train_fe)
-preds = test_rf.predict_proba(X_test_fe_scaled)[:, 1]
-
-print(f"New ROC-AUC Score with Engineered Features: {roc_auc_score(y_test_fe, preds):.4f}")
-
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-# 1. Reconstruct the sample patient profile to simulate
-# Clinical metrics: [Pregnancies, Glucose, BloodPressure, SkinThickness, Insulin, BMI, DiabetesPedigreeFunction, Age]
-base_patient = [2, 148, 72, 35, 125, 33.6, 0.627, 50]
-feature_names = X.columns
-
-# 2. Simulate 10-year progression (aging, with minor increases in BMI, Glucose, and Blood Pressure)
-timeline_data = []
-for yrs in range(0, 11, 2):
-    sim_patient = [
-        base_patient[0],                  # Pregnancies
-        base_patient[1] + (yrs * 1.5),    # Glucose
-        base_patient[2] + (yrs * 0.5),    # BloodPressure
-        base_patient[3],                  # SkinThickness
-        base_patient[4],                  # Insulin
-        base_patient[5] + (yrs * 0.1),    # BMI
-        base_patient[6],                  # DiabetesPedigreeFunction
-        base_patient[7] + yrs             # Age
-    ]
-
-    # Scale and predict risk probability
-    sim_scaled = scaler.transform([sim_patient])
-    risk_percentage = best_rf_model.predict_proba(sim_scaled)[0][1] * 100
-
-    timeline_data.append({
-        'Timeline': f"+{yrs} Yrs" if yrs > 0 else "Current",
-        'Diabetes Risk (%)': round(risk_percentage, 1)
-    })
-
-timeline_df = pd.DataFrame(timeline_data)
-
-# 3. Plot the risk percentage line
-sns.set_theme(style="whitegrid")
-plt.figure(figsize=(10, 5))
-
-plt.plot(
-    timeline_df['Timeline'],
-    timeline_df['Diabetes Risk (%)'],
-    marker='o',
-    color='#e74c3c',
-    linewidth=2.5,
-    markersize=8,
-    label='Projected Risk'
-)
-
-# Add a critical warning threshold line at 50% risk
-plt.axhline(
-    y=50,
-    color='orange',
-    linestyle='--',
-    linewidth=2,
-    label='High Risk Threshold (50%)'
-)
-
-# Add data labels directly on the points for readability
-for i, row in timeline_df.iterrows():
-    plt.text(
-        i,
-        row['Diabetes Risk (%)'] + 4,
-        f"{row['Diabetes Risk (%)']}%",
-        ha='center',
-        fontsize=10,
-        fontweight='bold',
-        color='#2c3e50'
-    )
-
-# Graph formatting and titles
-plt.title('10-Year Patient Diabetes Risk Progression Timeline', fontsize=14, fontweight='bold', pad=15)
-plt.xlabel('Timeline Projection', fontsize=12, fontweight='bold')
-plt.ylabel('Predicted Diabetes Risk (%)', fontsize=12, fontweight='bold')
-plt.ylim(0, 110)
-plt.legend(loc='upper left', fontsize=11)
-
-plt.tight_layout()
-plt.show()
-
-# 1. Install Streamlit and localtunnel for Colab hosting
-!pip install streamlit pyngrok -q
-
-# 2. Write the complete Streamlit application script to app.py
-app_code = """
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -332,8 +13,7 @@ st.title("🩺 Diabetes Risk & 10-Year Progression Timeline Simulator")
 st.markdown("Enter patient metrics on the sidebar to predict current diabetes risk and forecast progression over 10 years.")
 
 # --- Synthetic Model Training for Demo App ---
-# (In production, load your pickled model via joblib)
-@st.cache_data
+@st.cache_resource
 def load_data_and_model():
     url = "https://raw.githubusercontent.com/jbrownlee/Datasets/master/pima-indians-diabetes.data.csv"
     cols = ['Pregnancies', 'Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI', 'DiabetesPedigreeFunction', 'Age', 'Outcome']
@@ -372,7 +52,6 @@ patient_scaled = scaler.transform(patient_df)
 
 current_prob = model.predict_proba(patient_scaled)[0][1] * 100
 
-# Top layout
 col1, col2 = st.columns([1, 2])
 
 with col1:
@@ -387,7 +66,6 @@ with col1:
 with col2:
     st.subheader("📈 10-Year Timeline Progression")
 
-    # Generate timeline simulation
     timeline_data = []
     for yrs in range(0, 11, 2):
         sim_age = age + yrs
@@ -403,7 +81,6 @@ with col2:
 
     t_df = pd.DataFrame(timeline_data)
 
-    # Plot graph
     fig, ax = plt.subplots(figsize=(7, 3.5))
     sns.lineplot(x='Timeline', y='Risk', data=t_df, marker='o', color='#e74c3c', ax=ax, linewidth=2.5)
     ax.axhline(50, color='orange', linestyle='--', label='50% Threshold')
@@ -415,20 +92,4 @@ with col2:
 
 st.subheader("Data Table")
 st.dataframe(t_df)
-"""
-
-with open("app.py", "w") as f:
-    f.write(app_code)
-
-# 3. Launch Streamlit app using localtunnel in Google Colab
-import os
-os.system("streamlit run app.py & npx localtunnel --port 8501 &")
-
-import joblib
-
-# 1. Save your trained model and scaler to files
-joblib.dump(best_rf_model, 'diabetes_model.pkl')
-joblib.dump(scaler, 'scaler.pkl')
-
-print("✅ Model and Scaler successfully saved!")
 
