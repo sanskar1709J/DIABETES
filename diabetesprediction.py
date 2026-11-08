@@ -5,9 +5,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # Page Configuration
-st.set_page_config(page_title="Clinical Diabetes Risk & 10-Year Simulator", page_icon="🩺", layout="wide")
+st.set_page_config(page_title="Diabetes Risk & 10-Year Simulator", page_icon="🩺", layout="wide")
 
-# Load artifacts
+# Load artifacts safely
 @st.cache_resource
 def load_artifacts():
     model = joblib.load('diabetes_model.pkl')
@@ -17,10 +17,10 @@ def load_artifacts():
 
 model, scaler, feature_names = load_artifacts()
 
-st.title("🩺 Clinical AI-Driven Diabetes Risk & 10-Year Progression Simulator")
-st.markdown("Enter exact clinical lab values and patient vitals to calculate an immediate risk score powered by an optimized, probability-calibrated XGBoost model.")
+st.title("🩺 AI-Driven Diabetes Risk & 10-Year Progression Simulator")
+st.markdown("Enter patient clinical metrics below to calculate an immediate risk score and view long-term health projections.")
 
-# --- SIDEBAR INPUTS (Exact Clinical Metrics) ---
+# --- SIDEBAR INPUTS ---
 st.sidebar.header("Patient Clinical Metrics")
 pregnancies = st.sidebar.slider("Pregnancies", 0, 17, 3)
 glucose = st.sidebar.slider("Glucose Level (mg/dL)", 0, 200, 117)
@@ -31,19 +31,31 @@ bmi = st.sidebar.slider("BMI", 0.0, 67.1, 32.0)
 dpf = st.sidebar.slider("Diabetes Pedigree Function", 0.05, 2.42, 0.37)
 age = st.sidebar.slider("Age (Years)", 21, 81, 33)
 
-# --- FEATURE ENGINEERING (Matches training) ---
+# --- FEATURE ENGINEERING ---
 glucose_insulin_ratio = glucose / (insulin + 1)
 bmi_age = bmi * age
 glucose_bmi = glucose * bmi
 
-# Assemble input vector matching exact feature order
-input_features = np.array([[
-    pregnancies, glucose, bp, skin, insulin, bmi, dpf, age,
-    glucose_insulin_ratio, bmi_age, glucose_bmi
-]])
+# Create raw dictionary of all possible inputs
+raw_input_dict = {
+    'Pregnancies': pregnancies,
+    'Glucose': glucose,
+    'BloodPressure': bp,
+    'SkinThickness': skin,
+    'Insulin': insulin,
+    'BMI': bmi,
+    'DiabetesPedigreeFunction': dpf,
+    'Age': age,
+    'Glucose_Insulin_Ratio': glucose_insulin_ratio,
+    'BMI_Age': bmi_age,
+    'Glucose_BMI': glucose_bmi
+}
+
+# Dynamically build dataframe using ONLY the exact features the scaler/model expects
+input_df = pd.DataFrame([[raw_input_dict.get(col, 0) for col in feature_names]], columns=feature_names)
 
 # Scale and Predict Current Risk
-input_scaled = scaler.transform(input_features)
+input_scaled = scaler.transform(input_df)
 current_risk_proba = model.predict_proba(input_scaled)[0][1] * 100
 
 # --- DASHBOARD LAYOUT ---
@@ -59,14 +71,14 @@ with col1:
         st.success("✅ **Low Risk Status:** Maintain healthy habits and routine check-ups.")
 
 with col2:
-    st.subheader("💡 Clinical Model Insights")
-    st.markdown("This model evaluates exact metabolic markers (like glucose-to-insulin dynamics and BMI-age scaling). Try sliding **Glucose above 180** and **BMI above 35** to see the probability flexibly scale past **90%**!")
+    st.subheader("💡 Model Insights")
+    st.markdown("Your risk score is generated using an advanced machine learning model evaluating metabolic metrics and interaction ratios.")
 
 st.markdown("---")
 
 # --- 10-YEAR PROGRESSION SIMULATOR ---
 st.subheader("📈 10-Year Health Risk Progression Forecast")
-st.markdown("This simulation models how your diabetes risk evolves over the next decade assuming slight annual metabolic shifts (incremental age and gradual glucose/BMI increases).")
+st.markdown("This simulation models how your diabetes risk evolves over the next decade assuming minor annual metabolic changes.")
 
 years = list(range(0, 11))
 simulated_risks = []
@@ -76,17 +88,26 @@ for year in years:
     sim_glucose = glucose + (year * 0.4)
     sim_bmi = bmi + (year * 0.1)
     
-    sim_gi_ratio = sim_glucose / (insulin + 1)
-    sim_bmi_age = sim_bmi * sim_age
-    sim_glucose_bmi = sim_glucose * sim_bmi
+    sim_gi = sim_glucose / (insulin + 1)
+    sim_ba = sim_bmi * sim_age
+    sim_gb = sim_glucose * sim_bmi
     
-    sim_input = np.array([[
-        pregnancies, sim_glucose, bp, skin, insulin, 
-        sim_bmi, dpf, sim_age,
-        sim_gi_ratio, sim_bmi_age, sim_glucose_bmi
-    ]])
+    sim_dict = {
+        'Pregnancies': pregnancies,
+        'Glucose': sim_glucose,
+        'BloodPressure': bp,
+        'SkinThickness': skin,
+        'Insulin': insulin,
+        'BMI': sim_bmi,
+        'DiabetesPedigreeFunction': dpf,
+        'Age': sim_age,
+        'Glucose_Insulin_Ratio': sim_gi,
+        'BMI_Age': sim_ba,
+        'Glucose_BMI': sim_gb
+    }
     
-    sim_scaled = scaler.transform(sim_input)
+    sim_df = pd.DataFrame([[sim_dict.get(col, 0) for col in feature_names]], columns=feature_names)
+    sim_scaled = scaler.transform(sim_df)
     risk_val = model.predict_proba(sim_scaled)[0][1] * 100
     simulated_risks.append(risk_val)
 
