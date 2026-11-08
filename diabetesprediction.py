@@ -1,126 +1,53 @@
-import streamlit as st
-import joblib
-import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from xgboost import XGBClassifier
+from sklearn.metrics import roc_auc_score
+import joblib
 
-# Page Configuration
-st.set_page_config(page_title="Diabetes Risk & 10-Year Simulator", page_icon="🩺", layout="wide")
+# 1. Load PIMA Dataset
+url = "https://raw.githubusercontent.com/jbrownlee/Datasets/master/pima-indians-diabetes.data.csv"
+columns = ['Pregnancies', 'Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI', 'DiabetesPedigreeFunction', 'Age', 'Outcome']
+df = pd.read_csv(url, names=columns)
 
-# Load artifacts safely
-@st.cache_resource
-def load_artifacts():
-    model = joblib.load('diabetes_model.pkl')
-    scaler = joblib.load('scaler.pkl')
-    features = joblib.load('feature_names.pkl')
-    return model, scaler, features
+# 2. Clean zero-value medical anomalies
+cols_to_fix = ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI']
+for col in cols_to_fix:
+    df[col] = df[col].replace(0, np.nan)
+    df[col] = df[col].fillna(df[col].median())
 
-model, scaler, feature_names = load_artifacts()
+# 3. Feature Engineering for sharp separation
+df['Glucose_Insulin_Ratio'] = df['Glucose'] / (df['Insulin'] + 1)
+df['BMI_Age'] = df['BMI'] * df['Age']
+df['Glucose_BMI'] = df['Glucose'] * df['BMI']
 
-st.title("🩺 AI-Driven Diabetes Risk & 10-Year Progression Simulator")
-st.markdown("Enter patient clinical metrics below to calculate an immediate risk score and view long-term health projections.")
+# 4. Split data
+X = df.drop('Outcome', axis=1)
+y = df['Outcome']
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=42, stratify=y)
 
-# --- SIDEBAR INPUTS ---
-st.sidebar.header("Patient Clinical Metrics")
-pregnancies = st.sidebar.slider("Pregnancies", 0, 17, 3)
-glucose = st.sidebar.slider("Glucose Level (mg/dL)", 0, 200, 117)
-bp = st.sidebar.slider("Blood Pressure (mm Hg)", 0, 122, 72)
-skin = st.sidebar.slider("Skin Thickness (mm)", 0, 99, 23)
-insulin = st.sidebar.slider("Insulin (mu U/ml)", 0, 846, 30)
-bmi = st.sidebar.slider("BMI", 0.0, 67.1, 32.0)
-dpf = st.sidebar.slider("Diabetes Pedigree Function", 0.05, 2.42, 0.37)
-age = st.sidebar.slider("Age (Years)", 21, 81, 33)
+# 5. Scale features
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
 
-# --- FEATURE ENGINEERING ---
-glucose_insulin_ratio = glucose / (insulin + 1)
-bmi_age = bmi * age
-glucose_bmi = glucose * bmi
+# 6. Train direct XGBoost Classifier (Yields wide, highly responsive 0-100% probabilities)
+model = XGBClassifier(
+    n_estimators=100,
+    learning_rate=0.1,
+    max_depth=4,
+    random_state=42,
+    eval_metric='logloss'
+)
+model.fit(X_train_scaled, y_train)
 
-# Create raw dictionary of all possible inputs
-raw_input_dict = {
-    'Pregnancies': pregnancies,
-    'Glucose': glucose,
-    'BloodPressure': bp,
-    'SkinThickness': skin,
-    'Insulin': insulin,
-    'BMI': bmi,
-    'DiabetesPedigreeFunction': dpf,
-    'Age': age,
-    'Glucose_Insulin_Ratio': glucose_insulin_ratio,
-    'BMI_Age': bmi_age,
-    'Glucose_BMI': glucose_bmi
-}
+# Evaluate
+preds_proba = model.predict_proba(X_test_scaled)[:, 1]
+print("Direct XGBoost ROC-AUC Score:", roc_auc_score(y_test, preds_proba))
 
-# Dynamically build dataframe using ONLY the exact features the scaler/model expects
-input_df = pd.DataFrame([[raw_input_dict.get(col, 0) for col in feature_names]], columns=feature_names)
-
-# Scale and Predict Current Risk
-input_scaled = scaler.transform(input_df)
-current_risk_proba = model.predict_proba(input_scaled)[0][1] * 100
-
-# --- DASHBOARD LAYOUT ---
-col1, col2 = st.columns([1, 2])
-
-with col1:
-    st.subheader("Current Risk Assessment")
-    st.metric(label="Calculated Risk Probability", value=f"{current_risk_proba:.1f}%")
-    
-    if current_risk_proba > 50:
-        st.error("⚠️ **High Risk Status:** Recommended lifestyle intervention or clinical consultation.")
-    else:
-        st.success("✅ **Low Risk Status:** Maintain healthy habits and routine check-ups.")
-
-with col2:
-    st.subheader("💡 Model Insights")
-    st.markdown("Your risk score is generated using an advanced machine learning model evaluating metabolic metrics and interaction ratios.")
-
-st.markdown("---")
-
-# --- 10-YEAR PROGRESSION SIMULATOR ---
-st.subheader("📈 10-Year Health Risk Progression Forecast")
-st.markdown("This simulation models how your diabetes risk evolves over the next decade assuming minor annual metabolic changes.")
-
-years = list(range(0, 11))
-simulated_risks = []
-
-for year in years:
-    sim_age = age + year
-    sim_glucose = glucose + (year * 0.4)
-    sim_bmi = bmi + (year * 0.1)
-    
-    sim_gi = sim_glucose / (insulin + 1)
-    sim_ba = sim_bmi * sim_age
-    sim_gb = sim_glucose * sim_bmi
-    
-    sim_dict = {
-        'Pregnancies': pregnancies,
-        'Glucose': sim_glucose,
-        'BloodPressure': bp,
-        'SkinThickness': skin,
-        'Insulin': insulin,
-        'BMI': sim_bmi,
-        'DiabetesPedigreeFunction': dpf,
-        'Age': sim_age,
-        'Glucose_Insulin_Ratio': sim_gi,
-        'BMI_Age': sim_ba,
-        'Glucose_BMI': sim_gb
-    }
-    
-    sim_df = pd.DataFrame([[sim_dict.get(col, 0) for col in feature_names]], columns=feature_names)
-    sim_scaled = scaler.transform(sim_df)
-    risk_val = model.predict_proba(sim_scaled)[0][1] * 100
-    simulated_risks.append(risk_val)
-
-# Plotting
-fig, ax = plt.subplots(figsize=(10, 4))
-ax.plot(years, simulated_risks, marker='o', color='#ff4b4b', linewidth=2.5, markersize=6, label='Projected Risk (%)')
-ax.axhline(y=50, color='orange', linestyle='--', label='Critical Risk Threshold (50%)')
-
-ax.set_title("Decade Health Trajectory", fontsize=14, fontweight='bold')
-ax.set_xlabel("Years into Future", fontsize=11)
-ax.set_ylabel("Predicted Risk (%)", fontsize=11)
-ax.set_ylim(0, 100)
-ax.grid(True, linestyle=':', alpha=0.6)
-ax.legend()
-
-st.pyplot(fig)
+# 7. Save artifacts
+joblib.dump(model, 'diabetes_model.pkl')
+joblib.dump(scaler, 'scaler.pkl')
+joblib.dump(X.columns.tolist(), 'feature_names.pkl')
+print("✅ Direct Responsive Model Successfully Saved!")
