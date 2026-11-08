@@ -1,112 +1,54 @@
-import streamlit as st
-import joblib
-import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from imblearn.over_sampling import SMOTE
+from xgboost import XGBClassifier
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.metrics import roc_auc_score
+import joblib
 
-# Page Configuration
-st.set_page_config(page_title="CDC-Powered Diabetes Risk & 10-Year Simulator", page_icon="🩺", layout="wide")
+# 1. Load PIMA Dataset (Exact Clinical Metrics)
+url = "https://raw.githubusercontent.com/jbrownlee/Datasets/master/pima-indians-diabetes.data.csv"
+columns = ['Pregnancies', 'Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI', 'DiabetesPedigreeFunction', 'Age', 'Outcome']
+df = pd.read_csv(url, names=columns)
 
-# Load artifacts
-@st.cache_resource
-def load_artifacts():
-    model = joblib.load('diabetes_model.pkl')
-    scaler = joblib.load('scaler.pkl')
-    features = joblib.load('feature_names.pkl')
-    return model, scaler, features
+# 2. Clean zero-value medical anomalies
+cols_to_fix = ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI']
+for col in cols_to_fix:
+    df[col] = df[col].replace(0, np.nan)
+    df[col] = df[col].fillna(df[col].median())
 
-model, scaler, feature_names = load_artifacts()
+# 3. Feature Engineering for sharper mathematical separation
+df['Glucose_Insulin_Ratio'] = df['Glucose'] / (df['Insulin'] + 1)
+df['BMI_Age'] = df['BMI'] * df['Age']
+df['Glucose_BMI'] = df['Glucose'] * df['BMI']
 
-st.title("🩺 Enterprise-Grade Diabetes Risk & 10-Year Progression Simulator")
-st.markdown("Powered by an **XGBoost model trained on 250,000+ CDC health survey records**, this dashboard predicts immediate diabetes risk and forecasts long-term health trajectories.")
+# 4. Split data
+X = df.drop('Outcome', axis=1)
+y = df['Outcome']
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=42, stratify=y)
 
-# --- SIDEBAR INPUTS (CDC Health Indicators) ---
-st.sidebar.header("Patient Health Profile")
+# 5. Scale features
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
 
-high_bp = st.sidebar.selectbox("High Blood Pressure?", [0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
-high_chol = st.sidebar.selectbox("High Cholesterol?", [0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
-chol_check = st.sidebar.selectbox("Cholesterol Check in Past 5 Years?", [0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
-bmi = st.sidebar.slider("Body Mass Index (BMI)", 12.0, 98.0, 28.0)
-smoker = st.sidebar.selectbox("Smoker (At least 100 cigarettes in life)?", [0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
-stroke = st.sidebar.selectbox("History of Stroke?", [0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
-heart_disease = st.sidebar.selectbox("Heart Disease or Attack?", [0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
-phys_activity = st.sidebar.selectbox("Physical Activity in Past 30 Days?", [0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
-fruits = st.sidebar.selectbox("Consumes Fruit Daily?", [0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
-veggies = st.sidebar.selectbox("Consumes Vegetables Daily?", [0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
-hvy_alcohol = st.sidebar.selectbox("Heavy Alcohol Consumption?", [0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
-any_healthcare = st.sidebar.selectbox("Has Healthcare Coverage?", [0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
-no_doc_cost = st.sidebar.selectbox("Could Not Afford Doctor at Times?", [0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
-gen_hlth = st.sidebar.slider("General Health Score (1=Excellent, 5=Poor)", 1, 5, 3)
-ment_hlth = st.sidebar.slider("Days of Poor Mental Health (Past 30 days)", 0, 30, 0)
-phys_hlth = st.sidebar.slider("Days of Poor Physical Health (Past 30 days)", 0, 30, 0)
-diff_walk = st.sidebar.selectbox("Difficulty Walking or Climbing Stairs?", [0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
-sex = st.sidebar.selectbox("Biological Sex", [0, 1], format_func=lambda x: "Female" if x == 0 else "Male")
-age_category = st.sidebar.slider("Age Category Bracket (1=18-24 up to 13=80+)", 1, 13, 9)
-education = st.sidebar.slider("Education Level (1=Never attended to 6=College grad)", 1, 6, 4)
-income = st.sidebar.slider("Income Scale (1=Less than $15k to 8=$75k+)", 1, 8, 5)
+# 6. Apply SMOTE to balance and enrich training data
+smote = SMOTE(random_state=42)
+X_train_resampled, y_train_resampled = smote.fit_resample(X_train_scaled, y_train)
 
-# Assemble input vector matching feature list order
-input_data = pd.DataFrame([[
-    high_bp, high_chol, chol_check, bmi, smoker, stroke, heart_disease,
-    phys_activity, fruits, veggies, hvy_alcohol, any_healthcare, no_doc_cost,
-    gen_hlth, ment_hlth, phys_hlth, diff_walk, sex, age_category, education, income
-]], columns=feature_names)
+# 7. Train XGBoost and Calibrate Probabilities (Ensures full 0-100% flexibility)
+base_xgb = XGBClassifier(n_estimators=150, learning_rate=0.03, max_depth=4, random_state=42)
+model = CalibratedClassifierCV(estimator=base_xgb, method='sigmoid', cv=3)
+model.fit(X_train_resampled, y_train_resampled)
 
-# Scale and Predict Current Risk
-input_scaled = scaler.transform(input_data)
-current_risk_proba = model.predict_proba(input_scaled)[0][1] * 100
+# Evaluate
+preds_proba = model.predict_proba(X_test_scaled)[:, 1]
+print("ROC-AUC Score:", roc_auc_score(y_test, preds_proba))
 
-# --- DASHBOARD LAYOUT ---
-col1, col2 = st.columns([1, 2])
-
-with col1:
-    st.subheader("Current Risk Assessment")
-    st.metric(label="Calculated Risk Probability", value=f"{current_risk_proba:.1f}%")
-    
-    if current_risk_proba > 50:
-        st.error("⚠️ **High Risk Status:** Recommended lifestyle intervention or clinical consultation.")
-    else:
-        st.success("✅ **Low Risk Status:** Maintain healthy habits and routine check-ups.")
-
-with col2:
-    st.subheader("💡 Model Insights")
-    st.markdown("Your risk score is generated using an XGBoost model trained on hundreds of thousands of real CDC health surveys, weighting vital factors like BMI, blood pressure, general health, and age brackets.")
-
-st.markdown("---")
-
-# --- 10-YEAR PROGRESSION SIMULATOR ---
-st.subheader("📈 10-Year Health Risk Progression Forecast")
-st.markdown("This simulation models how your diabetes risk evolves over the next decade assuming gradual aging brackets and incremental lifestyle stress shifts.")
-
-years = list(range(0, 11))
-simulated_risks = []
-
-for year in years:
-    sim_data = input_data.copy()
-    
-    # Simulate aging and minor annual BMI/health creep over 10 years
-    future_age_cat = min(13, age_category + int(year / 3)) # Age bracket shifts every ~3 years
-    future_bmi = bmi + (year * 0.15)
-    future_gen_hlth = min(5, gen_hlth + (0.05 * year))
-    
-    sim_data['Age'] = future_age_cat
-    sim_data['BMI'] = future_bmi
-    sim_data['GenHlth'] = future_gen_hlth
-    
-    sim_scaled = scaler.transform(sim_data)
-    risk_val = model.predict_proba(sim_scaled)[0][1] * 100
-    simulated_risks.append(risk_val)
-
-# Plotting
-fig, ax = plt.subplots(figsize=(10, 4))
-ax.plot(years, simulated_risks, marker='o', color='#ff4b4b', linewidth=2.5, markersize=6, label='Projected Risk (%)')
-ax.axhline(y=50, color='orange', linestyle='--', label='Critical Risk Threshold (50%)')
-
-ax.set_title("Decade Health Trajectory (CDC Model)", fontsize=14, fontweight='bold')
-ax.set_xlabel("Years into Future", fontsize=11)
-ax.set_ylabel("Predicted Risk (%)", fontsize=11)
-ax.set_ylim(0, 100)
-ax.grid(True, linestyle=':', alpha=0.6)
-ax.legend()
-
-st.pyplot(fig)
+# 8. Save artifacts
+joblib.dump(model, 'diabetes_model.pkl')
+joblib.dump(scaler, 'scaler.pkl')
+joblib.dump(X.columns.tolist(), 'feature_names.pkl')
+print("✅ Exact-Metric Model Successfully Saved!")
